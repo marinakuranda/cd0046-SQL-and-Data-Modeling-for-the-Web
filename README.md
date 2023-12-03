@@ -27,3 +27,7 @@ flask db migrate
 
 # apply the latest migration to the Database
 flask db upgrade
+
+## Inspiration
+
+- https://github.com/reemkhd/Fyyur/blob/master/app.py

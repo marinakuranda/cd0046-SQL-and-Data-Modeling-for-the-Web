@@ -16,6 +16,9 @@ from flask_wtf import Form
 from forms import *
 from flask_migrate import Migrate
 import traceback
+from datetime import datetime
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy import select, func
 
 # ----------------------------------------------------------------------------#
 # App Config.
@@ -30,6 +33,14 @@ migrate = Migrate(app, db)
 # ----------------------------------------------------------------------------#
 # Models.
 # ----------------------------------------------------------------------------#
+
+
+venue_genre = db.Table('venue_genre',
+                       db.Column('venue_id', db.Integer,
+                                 db.ForeignKey('Venue.id')),
+                       db.Column('genre_id', db.Integer,
+                                 db.ForeignKey('Genre.id'))
+                       )
 
 
 class Venue(db.Model):
@@ -47,6 +58,19 @@ class Venue(db.Model):
     website_link = db.Column(db.String(120))
     seeking_description = db.Column(db.String(120))
 
+    @hybrid_property
+    def upcoming_shows(self):
+        return db.session.query(Show).filter(
+            Show.venue_id == self.id,
+            Show.start_time > datetime.now()
+        ).all()
+
+    @hybrid_property
+    def past_shows(self):
+        return db.session.query(Show).filter(
+            Show.venue_id == self.id,
+            Show.start_time < datetime.now()
+        ).all()
 
     def __repr__(self):
         return f'<Venue {self.id} {self.name}>'
@@ -54,6 +78,13 @@ class Venue(db.Model):
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
+
+artist_genre = db.Table('artist_genre',
+                        db.Column('artist_id', db.Integer,
+                                  db.ForeignKey('Artist.id')),
+                        db.Column('genre_id', db.Integer,
+                                  db.ForeignKey('Genre.id'))
+                        )
 
 class Artist(db.Model):
     __tablename__ = 'Artist'
@@ -63,16 +94,33 @@ class Artist(db.Model):
     city = db.Column(db.String(120))
     state = db.Column(db.String(120))
     phone = db.Column(db.String(120))
-    genres = db.Column(db.String(120))
+    genres = db.relationship('Genre',
+                             lazy='subquery',
+                             backref=db.backref('artists', lazy=True), secondary=artist_genre)
     image_link = db.Column(db.String(500))
     facebook_link = db.Column(db.String(120))
     website_link = db.Column(db.String(120))
     seeking_venue = db.Column(db.Boolean())
     seeking_description = db.Column(db.String(120))
 
-    def as_dict(self):
-        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+    @hybrid_property
+    def upcoming_shows(self):
+        return db.session.query(Show).filter(
+            Show.artist_id == self.id,
+            Show.start_time > datetime.now()
+        ).all()
 
+    @hybrid_property
+    def past_shows(self):
+        return db.session.query(Show).filter(
+            Show.artist_id == self.id,
+            Show.start_time < datetime.now()
+        ).all()
+
+    def as_dict(self):
+        artist_dict = {c.name: getattr(self, c.name) for c in self.__table__.columns}
+        artist_dict["genres"] = [genre.name for genre in self.genres]
+        return artist_dict
 
 class Show(db.Model):
     __tablename__ = 'Show'
@@ -85,8 +133,21 @@ class Show(db.Model):
     artist = db.relationship('Artist', backref=db.backref('shows'))
     venue = db.relationship('Venue', backref=db.backref('shows'))
 
+    def __repr__(self):
+        return f'<Show {self.id} {self.venue_id}>'
+
     def as_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+class Genre(db.Model):
+    __tablename__ = 'Genre'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), unique=True)
+
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
 # ----------------------------------------------------------------------------#
 # Filters.
 # ----------------------------------------------------------------------------#
@@ -118,8 +179,6 @@ def index():
 
 @app.route('/venues')
 def venues():
-    # TODO: replace with real venues data.
-    #       num_upcoming_shows should be aggregated based on number of upcoming shows per venue.
     print(json.dumps([row.as_dict()
           for row in Venue.query.order_by('id').all()], indent=4))
 
@@ -134,9 +193,7 @@ def venues():
                 "venues": []
             }
         data[row.city]["venues"].append(
-            {"id": row.id, "name": row.name, "num_upcoming_shows": 0, })
-
-    # print(json.dumps([value for value in data.values()], indent=4))
+            {"id": row.id, "name": row.name, "num_upcoming_shows": len(row.upcoming_shows), })
 
     # Example:
     # data = [{
@@ -179,14 +236,22 @@ def search_venues():
     return render_template('pages/search_venues.html', results=response, search_term=request.form.get('search_term', ''))
 
 # shows the venue page with the given venue_id
+
+
 @app.route('/venues/<int:venue_id>')
 def show_venue(venue_id):
+
     rows = Venue.query.get(venue_id)
 
     if rows is None:
         return not_found_error("Venue not found")
 
-    return render_template('pages/show_venue.html', venue=rows.as_dict())
+    venue = rows.as_dict()
+
+    venue["upcoming_shows"] = [show.as_dict() for show in rows.upcoming_shows]
+    venue["past_shows"] = [show.as_dict() for show in rows.past_shows]
+
+    return render_template('pages/show_venue.html', venue=venue)
 
     data1 = {
         "id": 1,
@@ -285,7 +350,6 @@ def create_venue_submission():
     error = False
     try:
         data = request.form
-        print(data)
         venue = Venue(**data)
         db.session.add(venue)
         db.session.commit()
@@ -320,29 +384,12 @@ def delete_venue(venue_id):
 
 @app.route('/artists')
 def artists():
-  query = Artist.query.order_by('id').all()
+    query = Artist.query.order_by('id').all()
+    res = []
+    for row in query:
+        res.append({"id": row.id, "name": row.name,})
 
-  res = []
-  for row in query:
-    res.append({
-      "id": row.id,
-      "name": row.name,
-    })
-
-
-#   print(json.dumps(res, indent=4))
-
-#   data = [{
-#         "id": 4,
-#         "name": "Guns N Petals",
-#     }, {
-#         "id": 5,
-#         "name": "Matt Quevedo",
-#     }, {
-#         "id": 6,
-#         "name": "The Wild Sax Band",
-#     }]
-  return render_template('pages/artists.html', artists=res)
+    return render_template('pages/artists.html', artists=res)
 
 
 @app.route('/artists/search', methods=['POST'])
@@ -366,10 +413,21 @@ def show_artist(artist_id):
     # shows the artist page with the given artist_id
     row = Artist.query.get(artist_id)
 
+    print(db.session.execute(
+        select(Artist).where(Artist.id == artist_id)
+    ).one()[0].genres)
+
     if row is None:
         return not_found_error("Artist not found")
 
-    return render_template('pages/show_artist.html', artist=row.as_dict())
+    artist = row.as_dict()
+    artist["past_shows"] = [show.as_dict() for show in row.past_shows]
+    artist["genres"] = [genre.name for genre in row.genres]
+    artist["upcoming_shows"] = [show.as_dict() for show in row.upcoming_shows]
+    artist["upcoming_shows_count"] = len(row.upcoming_shows)
+    artist["past_shows_count"] = len(row.past_shows)
+
+    return render_template('pages/show_artist.html', artist=artist)
 
     data1 = {
         "id": 4,
@@ -458,17 +516,32 @@ def edit_artist(artist_id):
     if res is None:
         return not_found_error()
 
-    print(res.as_dict())
-
-    form = ArtistForm(obj=res)
+    form = ArtistForm(data=res.as_dict())
 
     return render_template('forms/edit_artist.html', form=form, artist=res.as_dict())
 
 
 @app.route('/artists/<int:artist_id>/edit', methods=['POST'])
 def edit_artist_submission(artist_id):
-    # TODO: take values from the form submitted, and update existing
-    # artist record with ID <artist_id> using the new attributes
+    artist = Artist.query.get(artist_id)
+
+    data = request.form.to_dict()
+    data.pop("genres")
+
+    artist.name = data["name"]
+    artist.city = data["city"]
+    artist.state = data["state"]
+    artist.phone = data["phone"]
+    artist.image_link = data["image_link"]
+    artist.facebook_link = data["facebook_link"]
+    artist.website_link = data["website_link"]
+    artist.seeking_venue = "seeking_venue" in data
+    artist.seeking_description = data["seeking_description"]
+
+    existing_genres = Genre.query.filter(Genre.name.in_(request.form.getlist('genres'))).all()
+    artist.genres = existing_genres # [ Genre<1> Genre<2> ""]
+
+    db.session.commit()
 
     return redirect(url_for('show_artist', artist_id=artist_id))
 
@@ -509,16 +582,49 @@ def create_artist_form():
     form = ArtistForm()
     return render_template('forms/new_artist.html', form=form)
 
-
 @app.route('/artists/create', methods=['POST'])
 def create_artist_submission():
     # called upon submitting the new artist listing form
     artists = None
     error = False
     try:
-        artists = request.form
-        print(artists)
-        artist = Artist(**artists)
+        data = request.form.to_dict()
+        # data["genres"] = [Genre(name=genre) for genre in request.form.getlist('genres')]
+        existing_genres = Genre.query.filter(Genre.name.in_(request.form.getlist('genres'))).all()
+
+        if len(existing_genres) == 0:
+            [db.session.add(Genre(name=genre_name)) for genre_name in ['Alternative',
+            'Blues',
+            'Classical',
+            'Country',
+            'Electronic',
+            'Folk',
+            'Funk',
+            'Hip-Hop',
+            'Heavy Metal',
+            'Instrumental',
+            'Jazz',
+            'Musical Theatre',
+            'Pop',
+            'Punk',
+            'R&B',
+            'Reggae',
+            'Rock n Roll',
+            'Soul',
+            'Other']]
+            db.session.commit()
+            existing_genres = Genre.query.filter(Genre.name.in_(request.form.getlist('genres'))).all()
+
+        artist = Artist(name=data["name"],
+                        city=data["city"],
+                        state=data["state"],
+                        phone=data["phone"],
+                        genres=existing_genres,
+                        image_link=data["image_link"],
+                        facebook_link=data["facebook_link"],
+                        website_link=data["website_link"],
+                        seeking_venue="seeking_venue" in data,
+                        seeking_description=data["seeking_description"])
         db.session.add(artist)
         db.session.commit()
 
@@ -545,16 +651,16 @@ def create_artist_submission():
 @app.route('/shows')
 def shows():
     # displays list of shows at /shows
-    query = Show.query.order_by(Show.id).join(Artist).join(Venue).options(db.joinedload(Show.artist)).all()
+    query = Show.query.order_by(Show.id).filter(Show.start_time > datetime.today()).join(Artist).join(
+        Venue).options(db.joinedload(Show.artist)).all()
 
-    data = [{
-            "venue_id": show.venue_id,
+    data = [{"venue_id": show.venue_id,
             "venue_name": show.venue.name,
             "artist_id": show.artist_id,
             "artist_name": show.artist.name,
             "artist_image_link": show.artist.image_link,
             "start_time": str(show.start_time)
-        } for show in query]
+            } for show in query]
 
     # print(json.dumps(
     #     [{

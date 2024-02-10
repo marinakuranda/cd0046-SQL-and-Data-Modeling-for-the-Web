@@ -7,7 +7,7 @@ import sys
 import json
 import dateutil.parser
 import babel
-from flask import Flask, render_template, request, Response, flash, redirect, url_for, abort
+from flask import Flask, jsonify, render_template, request, Response, flash, redirect, url_for, abort
 from flask_moment import Moment
 from flask_sqlalchemy import SQLAlchemy
 import logging
@@ -387,15 +387,45 @@ def create_venue_submission():
 
     return render_template('pages/home.html')
 
-
 @app.route('/venues/<venue_id>', methods=['DELETE'])
 def delete_venue(venue_id):
-    # TODO: Complete this endpoint for taking a venue_id, and using
+    try:
+        # Leave for testing so that it does not actually delete the venue
+        # print(venue_id)
+        # return redirect(url_for('/venues'))
+
+        # Query the venue to be deleted
+        venue_to_delete = Venue.query.get(venue_id)
+
+        if venue_to_delete:
+            # Delete the venue record
+            db.session.delete(venue_to_delete)
+
+            # Commit the changes to the database
+            db.session.commit()
+
+            return jsonify({'success': True})
+        else:
+            # Venue with the given ID not found
+            return jsonify({'success': False, 'error': 'Venue not found'}), 404
+
+    except Exception as e:
+        # Handle exceptions, such as a failed database commit
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    finally:
+        # Close the session
+        db.session.close()
+
+        # Redirect to the homepage happens in the front-end
+
+    # Completes this endpoint for taking a venue_id, and using
     # SQLAlchemy ORM to delete a record. Handle cases where the session commit could fail.
 
     # BONUS CHALLENGE: Implement a button to delete a Venue on a Venue Page, have it so that
     # clicking that button delete it from the db then redirect the user to the homepage
-    return None
+    # return None
 
 #  Artists
 #  ----------------------------------------------------------------
@@ -591,16 +621,19 @@ def edit_venue(venue_id):
     #     "seeking_description": "We are on the lookout for a local artist to play every two weeks. Please call us.",
     #     "image_link": "https://images.unsplash.com/photo-1543900694-133f37abaaa5?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=400&q=60"
     # }
-    # TODO: populate form with values from venue with ID <venue_id>
+    # populate form with values from venue with ID <venue_id>
     return render_template('forms/edit_venue.html', form=form, venue=res.as_dict())
 
 
 @app.route('/venues/<int:venue_id>/edit', methods=['POST'])
 def edit_venue_submission(venue_id):
-    # TODO: take values from the form submitted, and update existing
+    # take values from the form submitted, and update existing
     # venue record with ID <venue_id> using the new attributes
     venue = Venue.query.get(venue_id)
     data = request.form.to_dict()
+
+    print('DATAT', data)
+
     data.pop("genres")
 
     venue.name = data["name"]
@@ -612,7 +645,6 @@ def edit_venue_submission(venue_id):
     venue.website_link = data["website_link"]
     venue.seeking_venue = "seeking_venue" in data
     venue.seeking_description = data["seeking_description"]
-    venue.upcoming_shows_count = data["upcoming_shows_count"]
 
     existing_genres = Genre.query.filter(Genre.name.in_(request.form.getlist('genres'))).all()
     venue.genres = existing_genres # [ Genre<1> Genre<2> ""]
